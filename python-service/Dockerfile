@@ -11,7 +11,7 @@ COPY requirements.txt ./
 RUN pip install --no-cache-dir -r requirements.txt
 
 # Run opentelemetry-bootstrap
-RUN opentelemetry-bootstrap -a install
+# RUN opentelemetry-bootstrap -a install
 
 # Copy the rest of the application code into the container
 COPY . .
@@ -24,4 +24,5 @@ ENV OTEL_PYTHON_LOGGING_AUTO_INSTRUMENTATION_ENABLED=true
 EXPOSE 5000
 
 # Define the command to run the application
-CMD [ "opentelemetry-instrument", "--service_name", "python-service", "python", "compute.py"]
+# CMD [ "opentelemetry-instrument", "--service_name", "python-service", "python", "compute.py"]
+CMD ["python", "compute.py"]
