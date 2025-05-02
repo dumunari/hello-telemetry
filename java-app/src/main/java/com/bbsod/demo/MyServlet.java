@@ -14,18 +14,21 @@ import java.sql.SQLException;
 import java.sql.Statement;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.logging.Logger;
 
 import org.json.JSONArray;
 import org.json.JSONObject;
+import org.slf4j.bridge.SLF4JBridgeHandler;
 
 // OpenTelemetry SDK
 import io.opentelemetry.sdk.OpenTelemetrySdk;
+import io.opentelemetry.sdk.logs.SdkLoggerProvider;
+import io.opentelemetry.sdk.logs.export.BatchLogRecordProcessor;
 import io.opentelemetry.sdk.metrics.SdkMeterProvider;
 import io.opentelemetry.sdk.metrics.export.PeriodicMetricReader;
 import io.opentelemetry.sdk.resources.Resource;
 import io.opentelemetry.sdk.trace.SdkTracerProvider;
 import io.opentelemetry.sdk.trace.export.SimpleSpanProcessor;
-import io.opentelemetry.api.GlobalOpenTelemetry;
 // OpenTelemetry API
 import io.opentelemetry.api.OpenTelemetry;
 import io.opentelemetry.api.common.AttributeKey;
@@ -37,10 +40,10 @@ import io.opentelemetry.api.trace.SpanKind;
 import io.opentelemetry.api.trace.Tracer;
 import io.opentelemetry.api.trace.propagation.W3CTraceContextPropagator;
 import io.opentelemetry.context.Context;
-import io.opentelemetry.context.Scope;
-import io.opentelemetry.context.propagation.TextMapPropagator;
+import io.opentelemetry.exporter.otlp.logs.OtlpGrpcLogRecordExporter;
 import io.opentelemetry.exporter.otlp.metrics.OtlpGrpcMetricExporter;
 import io.opentelemetry.exporter.otlp.trace.OtlpGrpcSpanExporter;
+import io.opentelemetry.instrumentation.logback.appender.v1_0.OpenTelemetryAppender;
 
 import org.apache.http.client.methods.CloseableHttpResponse;
 import org.apache.http.client.methods.HttpPost;
@@ -56,6 +59,8 @@ public class MyServlet extends HttpServlet {
     private final Meter meter;
     private final LongCounter requestCounter;
     private final Tracer tracer;
+    private static final java.util.logging.Logger julLogger = Logger.getLogger("jul-logger");
+
 
     // Constructor
     public MyServlet() {
@@ -65,6 +70,13 @@ public class MyServlet extends HttpServlet {
                 .setDescription("Count DB requests")
                 .build();
         this.tracer = openTelemetry.getTracer(INSTRUMENTATION_NAME);
+
+        // Install OpenTelemetry in logback appender
+        OpenTelemetryAppender.install(openTelemetry);
+
+        // Install SLF4JBridgeHandler to route JUL logs to SLF4J
+        SLF4JBridgeHandler.removeHandlersForRootLogger();
+        SLF4JBridgeHandler.install();
     }
 
     static OpenTelemetry initOpenTelemetry() {
@@ -99,9 +111,23 @@ public class MyServlet extends HttpServlet {
                 .addSpanProcessor(simpleSpanProcessor)
                 .build();
 
+        // Logs
+        OtlpGrpcLogRecordExporter otlpGrpcLogRecordExporter = OtlpGrpcLogRecordExporter.builder()
+                .setEndpoint("http://ht-otel-collector:4317")
+                .build();
+
+        BatchLogRecordProcessor batchLogRecordProcessor = BatchLogRecordProcessor.builder(otlpGrpcLogRecordExporter)
+                .build();
+
+        SdkLoggerProvider loggerProvider = SdkLoggerProvider.builder()
+                .setResource(resource)
+                .addLogRecordProcessor(batchLogRecordProcessor)
+                .build();
+
         OpenTelemetrySdk sdk = OpenTelemetrySdk.builder()
                 .setMeterProvider(sdkMeterProvider)
                 .setTracerProvider(tracerProvider)
+                .setLoggerProvider(loggerProvider)
                 .build();
 
         // Cleanup
@@ -156,6 +182,7 @@ public class MyServlet extends HttpServlet {
         String jdbcPassword = "mypassword";
 
         try {
+            julLogger.info("DB Connection initiated");
             // Load MySQL JDBC Driver
             Class.forName("com.mysql.cj.jdbc.Driver");
 
