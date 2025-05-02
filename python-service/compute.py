@@ -11,6 +11,13 @@ from opentelemetry.sdk.metrics.export import PeriodicExportingMetricReader
 from opentelemetry.sdk.trace.export import BatchSpanProcessor
 from opentelemetry.semconv.resource import ResourceAttributes
 from opentelemetry.trace.propagation.tracecontext import TraceContextTextMapPropagator
+from opentelemetry._logs import set_logger_provider
+from opentelemetry.exporter.otlp.proto.grpc._log_exporter import (
+    OTLPLogExporter,
+)
+from opentelemetry.sdk._logs import LoggerProvider, LoggingHandler
+from opentelemetry.sdk._logs.export import BatchLogRecordProcessor
+import logging
 
 # Create a Resource with the service.name attribute
 resource = Resource.create({ResourceAttributes.SERVICE_NAME: "python-service"})
@@ -34,6 +41,19 @@ tracer_provider.add_span_processor(span_processor)
 trace.set_tracer_provider(tracer_provider)
 tracer = trace.get_tracer(__name__)
 
+# Logs
+log_exporter = OTLPLogExporter(endpoint="http://ht-otel-collector:4317", insecure=True)
+log_processor = BatchLogRecordProcessor(log_exporter)
+logger_provider = LoggerProvider(resource=resource)
+logger_provider.add_log_record_processor(log_processor)
+set_logger_provider(logger_provider)
+handler = LoggingHandler(level=logging.NOTSET ,logger_provider=logger_provider)
+
+# Configure logging
+logging.basicConfig(level=logging.NOTSET,handlers=[handler])
+
+# Create different namespaced logger
+logger = logging.getLogger()
 
 app = Flask(__name__)
 
@@ -47,7 +67,7 @@ def compute_average_age():
 
     # Start a new span
     with tracer.start_as_current_span("ComputeSpan",context=ctx):
-
+        logger.info("Average compute in progress")
         # Process the request data
         data = request.json['data']
         if not data:
