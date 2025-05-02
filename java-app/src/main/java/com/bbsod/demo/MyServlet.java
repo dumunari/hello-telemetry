@@ -24,6 +24,8 @@ import org.slf4j.bridge.SLF4JBridgeHandler;
 import io.opentelemetry.api.GlobalOpenTelemetry;
 // OpenTelemetry API
 import io.opentelemetry.api.OpenTelemetry;
+import io.opentelemetry.api.baggage.Baggage;
+import io.opentelemetry.api.baggage.propagation.W3CBaggagePropagator;
 import io.opentelemetry.api.metrics.LongCounter;
 import io.opentelemetry.api.metrics.Meter;
 import io.opentelemetry.api.trace.Span;
@@ -163,7 +165,6 @@ public class MyServlet extends HttpServlet {
     private String getAverageAge(List<JSONObject> dataList) throws IOException {
         Span computeSpan = tracer.spanBuilder("Compute Request").setSpanKind(SpanKind.CLIENT)
                 .startSpan();
-        Context context = Context.current().with(computeSpan);
 
         try (CloseableHttpClient httpClient = HttpClients.createDefault()) {
             HttpPost httpPost = new HttpPost("http://ht-python-service:5000/compute_average_age");
@@ -174,6 +175,15 @@ public class MyServlet extends HttpServlet {
 
             StringEntity entity = new StringEntity(requestData.toString());
             httpPost.setEntity(entity);
+
+            Baggage baggage = Baggage.builder()
+                .put("user.id","123456")
+                .put("user.name", "John")
+                .build();
+
+            Context contextWithBaggage = Context.current().with(baggage);
+
+            W3CBaggagePropagator.getInstance().inject(contextWithBaggage, httpPost,HttpPost::setHeader);
 
             try (CloseableHttpResponse response = httpClient.execute(httpPost)) {
                 String responseString = EntityUtils.toString(response.getEntity());
