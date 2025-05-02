@@ -21,28 +21,15 @@ import org.json.JSONObject;
 import org.slf4j.bridge.SLF4JBridgeHandler;
 
 // OpenTelemetry SDK
-import io.opentelemetry.sdk.OpenTelemetrySdk;
-import io.opentelemetry.sdk.logs.SdkLoggerProvider;
-import io.opentelemetry.sdk.logs.export.BatchLogRecordProcessor;
-import io.opentelemetry.sdk.metrics.SdkMeterProvider;
-import io.opentelemetry.sdk.metrics.export.PeriodicMetricReader;
-import io.opentelemetry.sdk.resources.Resource;
-import io.opentelemetry.sdk.trace.SdkTracerProvider;
-import io.opentelemetry.sdk.trace.export.SimpleSpanProcessor;
+import io.opentelemetry.api.GlobalOpenTelemetry;
 // OpenTelemetry API
 import io.opentelemetry.api.OpenTelemetry;
-import io.opentelemetry.api.common.AttributeKey;
-import io.opentelemetry.api.common.Attributes;
 import io.opentelemetry.api.metrics.LongCounter;
 import io.opentelemetry.api.metrics.Meter;
 import io.opentelemetry.api.trace.Span;
 import io.opentelemetry.api.trace.SpanKind;
 import io.opentelemetry.api.trace.Tracer;
-import io.opentelemetry.api.trace.propagation.W3CTraceContextPropagator;
 import io.opentelemetry.context.Context;
-import io.opentelemetry.exporter.otlp.logs.OtlpGrpcLogRecordExporter;
-import io.opentelemetry.exporter.otlp.metrics.OtlpGrpcMetricExporter;
-import io.opentelemetry.exporter.otlp.trace.OtlpGrpcSpanExporter;
 import io.opentelemetry.instrumentation.logback.appender.v1_0.OpenTelemetryAppender;
 
 import org.apache.http.client.methods.CloseableHttpResponse;
@@ -64,7 +51,7 @@ public class MyServlet extends HttpServlet {
 
     // Constructor
     public MyServlet() {
-        OpenTelemetry openTelemetry = initOpenTelemetry();
+        OpenTelemetry openTelemetry = GlobalOpenTelemetry.get();
         this.meter = openTelemetry.getMeter(INSTRUMENTATION_NAME);
         this.requestCounter = meter.counterBuilder("app.db.db_requests")
                 .setDescription("Count DB requests")
@@ -79,63 +66,6 @@ public class MyServlet extends HttpServlet {
         SLF4JBridgeHandler.install();
     }
 
-    static OpenTelemetry initOpenTelemetry() {
-
-        // Set up the resource with service.name
-        Resource resource = Resource.create(Attributes.of(AttributeKey.stringKey("service.name"),
-                "tomcat-service"));
-
-        // Metrics
-        OtlpGrpcMetricExporter otlpGrpcMetricExporter = OtlpGrpcMetricExporter.builder()
-                .setEndpoint("http://ht-otel-collector:4317")
-                .build();
-
-        PeriodicMetricReader periodicMetricReader = PeriodicMetricReader.builder(otlpGrpcMetricExporter)
-                .setInterval(java.time.Duration.ofSeconds(20))
-                .build();
-
-        SdkMeterProvider sdkMeterProvider = SdkMeterProvider.builder()
-                .setResource(resource)
-                .registerMetricReader(periodicMetricReader)
-                .build();
-
-        // Traces
-        OtlpGrpcSpanExporter otlpGrpcSpanExporter = OtlpGrpcSpanExporter.builder()
-                .setEndpoint("http://ht-otel-collector:4317")
-                .build();
-
-        SimpleSpanProcessor simpleSpanProcessor = SimpleSpanProcessor.builder(otlpGrpcSpanExporter).build();
-
-        SdkTracerProvider tracerProvider = SdkTracerProvider.builder()
-                .setResource(resource)
-                .addSpanProcessor(simpleSpanProcessor)
-                .build();
-
-        // Logs
-        OtlpGrpcLogRecordExporter otlpGrpcLogRecordExporter = OtlpGrpcLogRecordExporter.builder()
-                .setEndpoint("http://ht-otel-collector:4317")
-                .build();
-
-        BatchLogRecordProcessor batchLogRecordProcessor = BatchLogRecordProcessor.builder(otlpGrpcLogRecordExporter)
-                .build();
-
-        SdkLoggerProvider loggerProvider = SdkLoggerProvider.builder()
-                .setResource(resource)
-                .addLogRecordProcessor(batchLogRecordProcessor)
-                .build();
-
-        OpenTelemetrySdk sdk = OpenTelemetrySdk.builder()
-                .setMeterProvider(sdkMeterProvider)
-                .setTracerProvider(tracerProvider)
-                .setLoggerProvider(loggerProvider)
-                .build();
-
-        // Cleanup
-        Runtime.getRuntime().addShutdownHook(new Thread(sdk::close));
-
-        return sdk;
-    }
-
     Context parentContext;
 
     @Override
@@ -146,17 +76,10 @@ public class MyServlet extends HttpServlet {
         PrintWriter out = response.getWriter();
         response.setContentType("text/html");
 
-        // Create a new ParentSpan
-        Span parentSpan = tracer.spanBuilder("GET").setNoParent().startSpan();
-        parentSpan.makeCurrent();
-
-        parentContext = Context.current().with(parentSpan);
-
         // Sleep for 2 seconds
         // Span to capture sleep
         Span sleepSpan = tracer.spanBuilder("SleepForTwoSeconds")
                 .setSpanKind(SpanKind.INTERNAL)
-                .setParent(parentContext)
                 .startSpan();
         try {
             Thread.sleep(2000);
@@ -173,7 +96,6 @@ public class MyServlet extends HttpServlet {
         // Context parentContext = Context.current().with(sleepSpan);
         Span dbSpan = tracer.spanBuilder("DatabaseConnection")
                 .setSpanKind(SpanKind.CLIENT)
-                .setParent(parentContext)
                 .startSpan();
 
         // JDBC connection parameters
@@ -230,7 +152,6 @@ public class MyServlet extends HttpServlet {
         } finally {
             dbSpan.end();
         }
-        parentSpan.end();
 
         // Make a request to the Python microservice
         String averageAge = getAverageAge(dataList);
@@ -240,7 +161,7 @@ public class MyServlet extends HttpServlet {
     }
 
     private String getAverageAge(List<JSONObject> dataList) throws IOException {
-        Span computeSpan = tracer.spanBuilder("Compute Request").setSpanKind(SpanKind.CLIENT).setParent(parentContext)
+        Span computeSpan = tracer.spanBuilder("Compute Request").setSpanKind(SpanKind.CLIENT)
                 .startSpan();
         Context context = Context.current().with(computeSpan);
 
@@ -253,10 +174,6 @@ public class MyServlet extends HttpServlet {
 
             StringEntity entity = new StringEntity(requestData.toString());
             httpPost.setEntity(entity);
-
-            // Inject the context into the HTTP request headers using W3CTraceContextPropagator 
-            W3CTraceContextPropagator propagator = W3CTraceContextPropagator.getInstance(); 
-            propagator.inject(context, httpPost, HttpPost::setHeader);
 
             try (CloseableHttpResponse response = httpClient.execute(httpPost)) {
                 String responseString = EntityUtils.toString(response.getEntity());
